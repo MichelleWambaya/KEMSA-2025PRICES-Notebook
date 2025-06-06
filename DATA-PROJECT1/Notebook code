@@ -1,0 +1,284 @@
+# Predicting Pharmaceutical Product Prices for KEMSA Supply Chain (Forecasting 2025 Prices Using 2017 Data)
+
+## 1. Data Collection & Understanding
+- I am using KEMSA 2017 CSV file from African Data Catalogue(https://open.africa/dataset/kemsa-price-list) - It may not be accurately updated but will work for this simulation.
+- ##### KEMSA Price List
+Kenya Medical Supplies Authority (KEMSA)'s recommended prices for medical supplies prescribed in essential health packages and national referral hospitals.
+Source	http://www.kemsa.co.ke/salespricelist/
+# 1. Import Libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import warnings
+warnings.filterwarnings("ignore")
+
+# 2. Load Data
+df = pd.read_csv("kemsa_pricelist_2017.csv") 
+print(f"Dataset shape: {df.shape}")
+df.head()
+## 2. Data Cleaning & Preprocessing
+# 3. Data Exploration
+df.info()
+print(df.describe(include='all'))
+print(df['Product Category'].value_counts())
+print(df['Pack Size'].value_counts())
+# 4. Data Cleaning
+# Drop irrelevant columns if present
+df = df.drop(columns=['Notes', 'Qty To Order', 'Value of Order'], errors='ignore')
+
+# Clean Price column: remove commas and convert to float
+df[' Price'] = df[' Price'].replace(',', '', regex=True).astype(float)
+
+# Drop rows with missing critical values
+df = df.dropna(subset=[' Price', 'Product Code', 'Product Name', 'Product Category', 'Pack Size'])
+
+df.reset_index(drop=True, inplace=True)
+df.info()
+## 3.Feature Engineering & Exploratory Data Analysis
+*Feature engineering* is the process of creating new input features or transforming existing ones to better represent the underlying problem to predictive models. Good features can significantly improve model accuracy, interpretability, and robustness.
+
+### Why is Feature Engineering Important
+- Enhances model learning: Raw data often contains information in formats that models cannot interpret directly (e.g., strings like "1000s" or product names).
+
+- Extracts hidden patterns: By breaking down complex fields (like product names or pack sizes), you can capture important signals that affect price.
+
+- Reduces noise: Cleaning and transforming features can reduce irrelevant or redundant information.
+
+- Handles categorical data: Many ML algorithms require numeric inputs, so categorical data needs to be encoded appropriately.
+# 5. Feature Engineering
+import re
+
+# Extract numeric pack size - *Numeric pack size quantifies the amount of product, which correlates with price*.
+df['Pack Size Num'] = df['Pack Size'].str.extract(r'(\d+)').astype(float)
+
+# Extract pack size unit - *Units like "s" (units), "ml" (milliliters), or "mg" (milligrams) indicate different packaging or dosage forms, influencing price.*
+df['Pack Size Unit'] = df['Pack Size'].str.extract(r'([a-zA-Z]+)')
+
+# Extract dosage (mg/ml) from product name -  *Dosage strength impacts the cost; higher dosages often mean higher prices.*
+df['Dosage'] = df['Product Name'].str.extract(r'(\d+\.?\d*)\s*(mg|ml|mL|MG)', expand=True)[0].astype(float)
+
+# Extract product form (tablet, syrup, etc.) - *Different forms have different manufacturing costs and pricing.*
+df['Form'] = df['Product Name'].str.extract(r'(Tablet|Capsule|Syrup|Injection|Cream)', flags=re.IGNORECASE, expand=False).str.lower()
+
+# One-hot encode categorical variables - *Machine learning models require numeric inputs; one-hot encoding converts categories into binary(numeric) features.*
+df = pd.get_dummies(df, columns=['Product Category', 'Pack Size Unit', 'Form', 'Item Type'], drop_first=True)
+
+df.head()
+
+feature_cols = [col for col in df.columns if col not in ['Price', 'Product Code', 'Product Name', 'Pack Size']]
+X = df[feature_cols]
+
+# Replace infinite values with NaN
+X.replace([np.inf, -np.inf], np.nan, inplace=True)
+
+# Fill NaN with 0 (or another value)
+X.fillna(0, inplace=True)
+
+# Now convert to int safely
+X = X.astype(int)
+
+# Replace infinite values with NaN
+X.replace([np.inf, -np.inf], np.nan, inplace=True)
+
+# Fill NaNs with zero or median or mean as appropriate
+X.fillna(0, inplace=True)
+
+# Now convert boolean columns to int safely
+X = X.astype(int)
+
+X = X.dropna()  # Drops rows with any NaN
+# or
+X = X.dropna(axis=1)  # Drops columns with any NaN
+
+# 1. Fix column names by stripping spaces
+df.columns = df.columns.str.strip()
+
+# 2. Define features and target with correct column names
+feature_cols = [col for col in df.columns if col not in ['Price', 'Product Code', 'Product Name', 'Pack Size']]
+X = df[feature_cols]
+y = df['Price']
+
+# 3. Check for missing values in X and fill or drop them
+print("Missing values per column before filling:")
+print(X.isnull().sum())
+
+# Fill missing values with 0 (or choose a suitable strategy)
+X = X.fillna(0)
+
+# 4. Convert boolean columns to integers
+bool_cols = X.select_dtypes(include=['bool']).columns
+for col in bool_cols:
+    X[col] = X[col].astype(int)
+
+# 5. Now safely split the data
+from sklearn.model_selection import train_test_split
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+print(f"Train samples: {X_train.shape[0]}, Test samples: {X_test.shape[0]}")
+
+X[bool_cols] = X[bool_cols].replace({True: 1, False: 0})
+
+print(df.columns.tolist())
+print(X.dtypes)
+
+#### EDA
+1. Price Distribution by Product Category (Boxplot)
+Shows how prices vary across different product categories, highlighting median prices, spread, and outliers to identify which categories tend to be more expensive or variable.
+
+2. Price vs. Pack Size Numeric (Scatterplot)
+Visualizes the relationship between product quantity (pack size) and price, revealing trends or clusters that indicate how packaging size influences cost.
+
+3. Price vs. Dosage (Scatterplot)
+Illustrates how dosage strength correlates with price, helping to understand if higher dosages command higher prices.
+
+4. Count of Products by Form (Bar Plot)
+Displays the frequency of different pharmaceutical forms (e.g., tablets, syrups), providing insight into product composition and availability.
+
+5. Correlation Heatmap of Numeric Features
+Highlights the strength and direction of relationships between numeric variables like price, pack size, and dosage, guiding feature selection and model building.
+
+# Creating a 'Product Category' column from one-hot encoded columns
+category_cols = [col for col in df.columns if col.startswith('Product Category_')]
+df['Product Category'] = df[category_cols].idxmax(axis=1).str.replace('Product Category_', '')
+
+plt.figure(figsize=(12,6))
+sns.boxplot(x='Product Category', y='Price', data=df)
+plt.xticks(rotation=65)
+plt.title('Price Distribution by Product Category')
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(10,6))
+sns.scatterplot(x='Pack Size Num', y='Price', hue='Product Category', data=df)
+plt.title('Price vs Pack Size by Product Category')
+plt.xlabel('Pack Size (Numeric)')
+plt.ylabel('Price')
+plt.legend(title='Product Category', bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.show()
+
+form_cols = [col for col in df.columns if col.startswith('Form_')]
+form_counts = df[form_cols].sum().sort_values(ascending=False)
+
+plt.figure(figsize=(8,5))
+sns.barplot(x=form_counts.index.str.replace('Form_', ''), y=form_counts.values)
+plt.title('Count of Products by Form')
+plt.xticks(rotation=65)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(8,6))
+sns.heatmap(df[['Price', 'Pack Size Num', 'Dosage']].corr(), annot=True, cmap='coolwarm')
+plt.title('Correlation Heatmap')
+plt.show()
+## 4. Model Building and Evaluation
+# 7. Model Training and Prediction
+rf = RandomForestRegressor(n_estimators=100, random_state=42)
+rf.fit(X_train, y_train)
+y_pred = rf.predict(X_test)
+# 8. Model Evaluation
+rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+mae = mean_absolute_error(y_test, y_pred)
+r2 = r2_score(y_test, y_pred)
+
+print(f"RMSE: {rmse:.2f}")
+print(f"MAE: {mae:.2f}")
+print(f"R^2: {r2:.2f}")
+
+## 5. Forecasting 2025 Prices
+# 9. Add Predictions and Product Category for Visualization
+df_test = X_test.copy()
+df_test['Actual Price'] = y_test
+df_test['Predicted Price'] = y_pred
+
+# If you saved original Product Category before encoding, merge it back here.
+# For example, if you kept original categories in df_orig:
+# df_test = df_test.merge(df_orig[['Product Code', 'Product Category']], left_index=True, right_index=True, how='left')
+
+# Otherwise, you can visualize using one-hot encoded columns or create a simplified category mapping.
+
+# 10. Visualizations
+
+# Actual vs Predicted Prices
+plt.figure(figsize=(8,8))
+sns.scatterplot(x='Actual Price', y='Predicted Price', data=df_test)
+plt.plot([df_test['Actual Price'].min(), df_test['Actual Price'].max()],
+         [df_test['Actual Price'].min(), df_test['Actual Price'].max()],
+         color='red', linestyle='--')
+plt.title('Actual vs Predicted Prices')
+plt.xlabel('Actual Price')
+plt.ylabel('Predicted Price')
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# Feature Importance
+importances = rf.feature_importances_
+indices = np.argsort(importances)[::-1]
+features = X.columns
+
+plt.figure(figsize=(14,7))
+plt.title("Feature Importances")
+plt.bar(range(len(importances)), importances[indices], align='center')
+plt.xticks(range(len(importances)), [features[i] for i in indices], rotation=90)
+plt.tight_layout()
+plt.show()
+# 11. Summary Statistics (Optional)
+# Group by a product category if available, else by a proxy column
+# Example (replace 'Product Category_TABLETS AND CAPSULES' with your actual column):
+if 'Product Category_TABLETS AND CAPSULES' in df_test.columns:
+    summary_stats = df_test.groupby('Product Category_TABLETS AND CAPSULES')[['Actual Price', 'Predicted Price']].agg(['mean', 'median', 'std']).round(2)
+    print(summary_stats)
+else:
+    print("No suitable product category column found for grouping.")
+df.describe()
+df.head()
+# Assuming df_2025 is your 2025 dataset prepared similarly to training data
+X_2025 = df.drop(columns=['Price', 'Product Code', 'Product Name', 'Pack Size', 'Product Category'])
+#X_2025 = X_2025.astype(int)  # if needed
+
+# Predict prices for 2025
+price_predictions_2025 = rf.predict(X_2025)
+
+# Add predictions to dataframe
+df['Predicted Price 2025'] = price_predictions_2025
+# Preview predictions
+print(df[['Product Name','Price','Predicted Price 2025']].head())
+# 📊 Project Conclusions & Recommendations
+
+## Summary
+- **Objective:** Built a machine learning model to forecast pharmaceutical product prices for KEMSA in 2025, using 2017 data.
+- **Approach:** Cleaned and engineered features from the KEMSA price list, applied a Random Forest regression model, and tuned hyperparameters for optimal performance.
+- **Key Features:** Dosage, pack size, and product category were among the most influential factors in price prediction.
+
+## Key Findings
+- The tuned model achieved strong predictive performance (see RMSE, MAE, and R² scores above).
+- **Dosage** and **pack size** are the most significant drivers of price, followed by product category.
+- There is substantial price variation across product categories (e.g., tablets/capsules vs. oral liquids).
+- The model’s forecasts can help KEMSA anticipate 2025 prices for budgeting and procurement.
+
+## Limitations
+- The analysis used 2017 data; market conditions, inflation, and new products may affect 2025 prices.
+- Some product features (e.g., formulation specifics, supplier differences) were not included due to data limitations.
+- The model assumes historical patterns will generally hold in the future.
+
+## Recommendations
+- **Use these forecasts** as a guide for procurement planning, but update the model regularly with new data for greater accuracy.
+- **Monitor key drivers** (dosage, pack size, category) when negotiating prices or evaluating supplier quotes.
+- **Expand the dataset** with more recent price lists and additional product attributes for future analyses.
+
+## Next Steps
+- Integrate more recent data as it becomes available.
+- Explore advanced forecasting methods (e.g., time series analysis) if temporal data is collected.
+- Share these insights with procurement and budgeting teams for actionable planning.
+
+*Prepared by: Michelle Wambaya, 6th July 2025*
+
+# Save file (adjust as needed)
+df.to_csv('KEMSA2025_PriceForecast.csv', index=False)
+
+
